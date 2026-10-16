@@ -1,0 +1,5 @@
+/venv
+.env
+flights.csv
+website/node_modules/
+website/build/

@@ -1,0 +1,8 @@
+{
+  "label": "Base de Datos Transaccional",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "description": "Documentación técnica del esquema operacional y los scripts de inicialización (Seed) de VuelaData."
+  }
+}
