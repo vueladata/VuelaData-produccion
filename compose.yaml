@@ -1,0 +1,135 @@
+name: vueladata
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vueladata}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dev_postgres_password}
+      POSTGRES_DB: ${POSTGRES_DB:-vueladata}
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-admin}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-dev_rabbitmq_password}
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  fleet_generate:
+    image: vueladata-app:local
+    # This one-shot job writes CSVs to a host bind mount for local inspection.
+    user: "0:0"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "vueladata.fleet.itinerary.generate"]
+    environment:
+      VUELADATA_DATA_DIR: /app/data
+      VUELADATA_WEEK_START_DATE: ${VUELADATA_WEEK_START_DATE:-2026-10-19}
+    volumes:
+      - ./data/generated:/app/data/generated
+    restart: "no"
+
+  db_seed:
+    image: vueladata-app:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "vueladata.data.seed", "--volumen", "small", "--tasa-defectos", "0.1"]
+    environment:
+      VUELADATA_DATA_DIR: /app/data
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-vueladata}
+      DB_USER: ${POSTGRES_USER:-vueladata}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-dev_postgres_password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: vueladata-app:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "vueladata.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-vueladata}:${POSTGRES_PASSWORD:-dev_postgres_password}@postgres:5432/${POSTGRES_DB:-vueladata}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      db_seed:
+        condition: service_completed_successfully
+      fleet_generate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/db', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  oooi_consumer:
+    image: vueladata-app:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "vueladata.operations.oooi.consumer"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER:-admin}
+      RABBITMQ_PASS: ${RABBITMQ_DEFAULT_PASS:-dev_rabbitmq_password}
+      QUEUE_NAME: eventos_oooi_queue
+      RABBITMQ_MAX_ATTEMPTS: 30
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  oooi_producer:
+    image: vueladata-app:local
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "vueladata.operations.oooi.producer"]
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_USER: ${RABBITMQ_DEFAULT_USER:-admin}
+      RABBITMQ_PASS: ${RABBITMQ_DEFAULT_PASS:-dev_rabbitmq_password}
+      QUEUE_NAME: eventos_oooi_queue
+      OOOI_PUBLISH_INTERVAL_SECONDS: ${OOOI_PUBLISH_INTERVAL_SECONDS:-0.01}
+      RABBITMQ_MAX_ATTEMPTS: 30
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      oooi_consumer:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  postgres_data:

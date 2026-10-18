@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --all-groups
+      - name: Compile Python modules
+        run: uv run python -m compileall -q src
+      - name: Run schema tests
+        run: uv run pytest tests/api/test_schemas.py
+      - name: Validate generator
+        run: uv run python -m vueladata.fleet.itinerary.generate

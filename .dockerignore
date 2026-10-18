@@ -1,0 +1,17 @@
+.git
+.github
+.vscode
+.idea
+.env
+.env.*
+!.env.example
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+*.egg-info
+tests
+data/generated/*
+!data/generated/.gitkeep

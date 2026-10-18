@@ -1,117 +1,88 @@
-# VuelaData Workspace
+# VuelaData
 
-Este repositorio reúne la infraestructura base de VuelaData para levantar de una sola vez los servicios principales del proyecto en Docker.
+VuelaData is an integrated airline operations and data platform. The repository is organized as one Python application with domain modules for the REST API, fleet itinerary generation, database seeding, and OOOI event simulation.
 
-## Arquitectura del workspace
+## Architecture
 
-El proyecto está dividido en varios módulos funcionales dentro del mismo workspace:
+- **FastAPI** exposes the operational API and its OpenAPI documentation.
+- **PostgreSQL** stores operational data. The schema is initialized when the database volume is first created.
+- **Fleet itinerary generator (F6)** creates route, fleet, and weekly itinerary CSV files automatically at startup. Files are written to `data/generated/` on the host.
+- **RabbitMQ** transports OOOI events between the F4 producer and consumer.
+- **Database seed** loads reproducible sample data after PostgreSQL becomes healthy.
+- **Docker Compose** coordinates startup and waits for prerequisite services and one-shot jobs.
 
-- API-VuelaData: backend FastAPI con PostgreSQL y endpoints operativos.
-- DB-VuelaData: generador de datos sintéticos y sembrado inicial de la base de datos.
-- Stream-VuelaData: simulador de eventos OOOI con RabbitMQ.
-- F6-csv-VuelaData: generación de CSVs de rutas, flota e itinerarios.
-- DB-VuelaData/schema_postgresql.sql: esquema relacional principal de la base de datos.
+## Start the full environment
 
-## Qué se levanta con Docker Compose
+Docker Desktop must be running. From the repository root, run:
 
-Desde la raíz del workspace, el comando:
-
-```bash
-docker compose up
+```powershell
+docker compose up --build
 ```
 
-levanta estos servicios:
+No separate script or per-module startup command is required. On startup, Compose builds the application image, starts PostgreSQL and RabbitMQ, generates the F6 CSV files, seeds PostgreSQL, starts the API, publishes OOOI events, and runs the consumer that acknowledges them.
 
-- PostgreSQL: base de datos principal
-- API FastAPI: backend operativo de VuelaData
-- RabbitMQ: broker para eventos del módulo Stream F4
-- DB-VuelaData seed: carga inicial de datos sintéticos en PostgreSQL
+> The first run downloads base images and Python dependencies, so it can take several minutes.
 
-## Servicios y puertos
+## Local endpoints
 
-| Servicio | URL / Puerto | Descripción |
-| --- | --- | --- |
-| API FastAPI | http://localhost:8000 | Backend principal |
-| Swagger | http://localhost:8000/docs | Documentación OpenAPI |
-| PostgreSQL | localhost:5434 | Base de datos relacional |
-| RabbitMQ | localhost:5672 | Broker AMQP |
-| RabbitMQ UI | http://localhost:15672 | Administración RabbitMQ |
+| Component | Address |
+| --- | --- |
+| API health | http://localhost:8000/health |
+| Database health | http://localhost:8000/health/db |
+| OpenAPI / Swagger | http://localhost:8000/docs |
+| RabbitMQ management | http://localhost:15672 |
+| PostgreSQL | `localhost:5434` |
 
-## Variables de entorno
+Default local development credentials are provided by Compose for convenience. Change them for any shared or deployed environment, and never commit a real `.env` file.
 
-La raíz del workspace incluye el archivo `.env` con la configuración base. Los valores más importantes son:
+## Generated CSV files
 
-```env
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_DB=vueladata_db
-POSTGRES_PORT=5434
-API_PORT=8000
-RABBITMQ_PORT=5672
-RABBITMQ_MGMT_PORT=15672
-RABBITMQ_DEFAULT_USER=admin
-RABBITMQ_DEFAULT_PASS=admin123
-```
+After the `fleet_generate` job completes, these files should exist in `data/generated/`:
 
-## Cómo levantar todo el proyecto
+- `synthetic_routes.csv`
+- `synthetic_fleet.csv`
+- `synthetic_weekly_itinerary.csv`
 
-Desde la carpeta raíz:
+The generator validates the weekly schedule before writing the files. If validation fails, the job exits with an error and the startup chain does not silently continue as if generation succeeded.
 
-```bash
-docker compose up -d --build
-```
+## Useful commands
 
-Esto construye las imágenes necesarias y levanta la pila completa.
+```powershell
+# See running and completed services
+docker compose ps -a
 
-Si quieres reiniciar desde cero:
+# Inspect service logs
+docker compose logs -f api db_seed fleet_generate oooi_producer oooi_consumer
 
-```bash
+# Stop services (keeps database data)
 docker compose down
 
-docker compose up -d --build
+# Reset the local database volume and reinitialize from scratch
+# WARNING: this deletes the local PostgreSQL volume
+docker compose down -v
 ```
 
-## Verificación rápida
-
-Después de levantar la pila, puedes comprobar:
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/health/db
-```
-
-Debe devolver respuestas con estado `200 OK`.
-
-También puedes revisar los contenedores activos:
-
-```bash
-docker compose ps
-```
-
-## Nota importante sobre la base de datos
-
-La base de datos del proyecto usa el esquema definido en:
-
-- [DB-VuelaData/schema_postgresql.sql](DB-VuelaData/schema_postgresql.sql)
-
-Al iniciar el compose, se inicializa automáticamente con ese esquema y el seed de datos sintéticos del módulo DB-VuelaData.
-
-## Recomendación de uso
-
-- Para trabajar con la API y la base de datos: usa el arranque raíz con Docker Compose.
-- Para generar CSVs del módulo F6: entra a la carpeta correspondiente y ejecuta el script del generador manualmente si lo necesitas.
-- Para el flujo de eventos F4: RabbitMQ queda levantado y listo para usar desde el módulo Stream-VuelaData.
-
-## Estructura relevante del workspace
+## Repository structure
 
 ```text
-vueladata-workspace/
-├── docker-compose.yml
-├── .env
-├── README.md
-├── API-VuelaData/
-├── DB-VuelaData/
-├── F6-csv-VuelaData/
-├── Stream-VuelaData/
-└── ...
+vueladata/
+├── src/vueladata/
+│   ├── api/                 # FastAPI routers, models, schemas and CRUD
+│   ├── fleet/itinerary/     # F6 CSV generator
+│   ├── operations/oooi/     # F4 OOOI event producer and generator
+│   └── data/                # PostgreSQL seed process
+├── data/reference/          # Canonical airport and airline source files
+├── data/generated/          # Generated CSV output (not committed)
+├── database/schema.sql      # PostgreSQL schema
+├── tests/                   # Automated tests
+├── docs/                    # Project documentation in Markdown
+├── Dockerfile               # Shared application image
+├── compose.yaml             # Integrated local environment
+└── pyproject.toml           # Python package and dependencies
 ```
+
+## Notes
+
+- PostgreSQL and RabbitMQ use their official images; they do not need custom Dockerfiles.
+- Python jobs share the same application image and package. Their Compose commands determine whether they run the API or a one-shot task.
+- The F6 CSVs are generated automatically. The existing database seed independently populates the relational operational model; mapping F6 output columns into relational tables is a separate data-integration step and is not implied by CSV generation alone.
